@@ -15,14 +15,16 @@ def send_telegram_message(message: str) -> bool:
 
 def send_telegram_notification(draft_text: str, title: str, results: dict):
     threads_status = "✅" if results.get("Threads") else "❌"
-    ig_status = "✅" if results.get("Instagram") else "❌"
+    ig_feed_status = "✅" if results.get("Instagram Feed") else "❌"
+    ig_story_status = "✅" if results.get("Instagram Story") else "❌"
 
     msg = (
         f"📣 *AUTO-PUBLISH SUMMARY*\n\n"
         f"📌 *Headline:* {title[:120]}\n\n"
         f"📊 *Platform Status:*\n"
         f"{threads_status} Threads\n"
-        f"{ig_status} Instagram\n\n"
+        f"{ig_feed_status} Instagram Feed\n"
+        f"{ig_story_status} Instagram Story\n\n"
         f"📝 *Draft Overview:*\n{draft_text[:300]}..."
     )
     send_telegram_message(msg)
