@@ -1,89 +1,79 @@
+import os
 import time
 import requests
-from config import IG_USER_ID, META_ACCESS_TOKEN
+
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+API_VERSION = "v21.0"
 
 def post_to_instagram(caption: str, image_url: str) -> bool:
-    """Publishes an image post to Instagram Feed via Meta Graph API."""
-    user_id = IG_USER_ID.strip() if IG_USER_ID else ""
-    token = META_ACCESS_TOKEN.strip() if META_ACCESS_TOKEN else ""
+    """Publishes photos directly using Instagram API with Instagram Login (No Facebook Page)."""
+    user_id = os.getenv("INSTAGRAM_USER_ID", "").strip() or INSTAGRAM_USER_ID
+    access_token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip() or INSTAGRAM_ACCESS_TOKEN
 
-    if not user_id or not token or not image_url:
-        print(f"[!] IG Feed Skipped: Missing user_id ({bool(user_id)}), token ({bool(token)}), or image_url ({bool(image_url)})")
+    if not user_id or not access_token:
+        print("[!] Instagram direct error: INSTAGRAM_USER_ID or INSTAGRAM_ACCESS_TOKEN missing.")
         return False
 
-    try:
-        # Step 1: Create Container
-        container_url = f"https://graph.facebook.com/v19.0/{user_id}/media"
-        payload = {
-            "image_url": image_url,
-            "caption": caption,
-            "access_token": token
-        }
-        res = requests.post(container_url, data=payload, timeout=15)
-        data = res.json()
+    # Step 1: Create Media Container directly on graph.instagram.com
+    container_url = f"https://graph.instagram.com/{API_VERSION}/{user_id}/media"
+    container_payload = {
+        "image_url": image_url,
+        "caption": caption,
+        "access_token": access_token
+    }
 
-        if "id" not in data:
-            print(f"[!] IG Feed Container Error: {data}")
+    try:
+        res = requests.post(container_url, data=container_payload, timeout=20)
+        res_data = res.json()
+
+        if res.status_code != 200 or "id" not in res_data:
+            print(f"[!] Instagram Container Creation Failed: {res.text}")
             return False
 
-        creation_id = data["id"]
-        time.sleep(5)  # Allow Meta processing time
+        container_id = res_data["id"]
+        print(f"[+] Instagram media container created: {container_id}")
 
-        # Step 2: Publish Container
-        publish_url = f"https://graph.facebook.com/v19.0/{user_id}/media_publish"
-        pub_res = requests.post(publish_url, data={"creation_id": creation_id, "access_token": token}, timeout=15)
+        # Step 2: Poll container status until media finishes processing
+        status_url = f"https://graph.instagram.com/{API_VERSION}/{container_id}"
+        is_ready = False
+        for _ in range(6):
+            time.sleep(3)
+            check_res = requests.get(
+                status_url,
+                params={"fields": "status_code", "access_token": access_token},
+                timeout=10
+            ).json()
+
+            status = check_res.get("status_code")
+            if status == "FINISHED":
+                is_ready = True
+                break
+            elif status == "ERROR":
+                print(f"[!] Instagram container processing error: {check_res}")
+                return False
+
+        if not is_ready:
+            print("[!] Instagram container processing timed out.")
+            return False
+
+        # Step 3: Publish Media Container
+        publish_url = f"https://graph.instagram.com/{API_VERSION}/{user_id}/media_publish"
+        publish_payload = {
+            "creation_id": container_id,
+            "access_token": access_token
+        }
+
+        pub_res = requests.post(publish_url, data=publish_payload, timeout=20)
         pub_data = pub_res.json()
 
-        if "id" in pub_data:
-            print(f"[+] Published to Instagram Feed ID: {pub_data['id']}")
+        if pub_res.status_code == 200 and "id" in pub_data:
+            print(f"[+] Successfully published to Instagram. Post ID: {pub_data['id']}")
             return True
         else:
-            print(f"[!] IG Feed Publish Error: {pub_data}")
+            print(f"[!] Instagram Publish Failed: {pub_res.text}")
             return False
 
     except Exception as e:
-        print(f"[!] IG Feed Exception: {e}")
-        return False
-
-def post_story_to_instagram(image_url: str) -> bool:
-    """Publishes an image story to Instagram via Meta Graph API."""
-    user_id = IG_USER_ID.strip() if IG_USER_ID else ""
-    token = META_ACCESS_TOKEN.strip() if META_ACCESS_TOKEN else ""
-
-    if not user_id or not token or not image_url:
-        print(f"[!] IG Story Skipped: Missing user_id ({bool(user_id)}), token ({bool(token)}), or image_url ({bool(image_url)})")
-        return False
-
-    try:
-        # Step 1: Create Story Container
-        container_url = f"https://graph.facebook.com/v19.0/{user_id}/media"
-        payload = {
-            "image_url": image_url,
-            "media_type": "STORIES",
-            "access_token": token
-        }
-        res = requests.post(container_url, data=payload, timeout=15)
-        data = res.json()
-
-        if "id" not in data:
-            print(f"[!] IG Story Container Error: {data}")
-            return False
-
-        creation_id = data["id"]
-        time.sleep(5)  # Allow Meta processing time
-
-        # Step 2: Publish Container
-        publish_url = f"https://graph.facebook.com/v19.0/{user_id}/media_publish"
-        pub_res = requests.post(publish_url, data={"creation_id": creation_id, "access_token": token}, timeout=15)
-        pub_data = pub_res.json()
-
-        if "id" in pub_data:
-            print(f"[+] Published to Instagram Story ID: {pub_data['id']}")
-            return True
-        else:
-            print(f"[!] IG Story Publish Error: {pub_data}")
-            return False
-
-    except Exception as e:
-        print(f"[!] IG Story Exception: {e}")
+        print(f"[!] Instagram Direct API exception: {e}")
         return False
