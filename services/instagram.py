@@ -2,17 +2,17 @@ import os
 import time
 import requests
 
-INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "17841438996464898").strip()
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 API_VERSION = "v21.0"
 
 def post_to_instagram(caption: str, image_url: str) -> bool:
-    """Publishes photos directly using Instagram API with Instagram Login (No Facebook Page)."""
+    """Publishes a photo post directly via Instagram API with Instagram Login."""
     user_id = os.getenv("INSTAGRAM_USER_ID", "").strip() or INSTAGRAM_USER_ID
     access_token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip() or INSTAGRAM_ACCESS_TOKEN
 
     if not user_id or not access_token:
-        print("[!] Instagram direct error: INSTAGRAM_USER_ID or INSTAGRAM_ACCESS_TOKEN missing.")
+        print("[!] Instagram Direct Error: INSTAGRAM_USER_ID or INSTAGRAM_ACCESS_TOKEN missing.")
         return False
 
     # Step 1: Create Media Container directly on graph.instagram.com
@@ -28,7 +28,7 @@ def post_to_instagram(caption: str, image_url: str) -> bool:
         res_data = res.json()
 
         if res.status_code != 200 or "id" not in res_data:
-            print(f"[!] Instagram Container Creation Failed: {res.text}")
+            print(f"[!] Instagram Container Creation Failed ({res.status_code}): {res.text}")
             return False
 
         container_id = res_data["id"]
@@ -37,7 +37,7 @@ def post_to_instagram(caption: str, image_url: str) -> bool:
         # Step 2: Poll container status until media finishes processing
         status_url = f"https://graph.instagram.com/{API_VERSION}/{container_id}"
         is_ready = False
-        for _ in range(6):
+        for _ in range(8):
             time.sleep(3)
             check_res = requests.get(
                 status_url,
@@ -50,7 +50,7 @@ def post_to_instagram(caption: str, image_url: str) -> bool:
                 is_ready = True
                 break
             elif status == "ERROR":
-                print(f"[!] Instagram container processing error: {check_res}")
+                print(f"[!] Instagram container processing failed: {check_res}")
                 return False
 
         if not is_ready:
@@ -71,7 +71,7 @@ def post_to_instagram(caption: str, image_url: str) -> bool:
             print(f"[+] Successfully published to Instagram. Post ID: {pub_data['id']}")
             return True
         else:
-            print(f"[!] Instagram Publish Failed: {pub_res.text}")
+            print(f"[!] Instagram Media Publish Failed: {pub_res.text}")
             return False
 
     except Exception as e:
