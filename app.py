@@ -18,7 +18,7 @@ from services.telegram import (
     send_telegram_notification, send_ingestion_summary, send_publishing_summary, send_telegram_message
 )
 from services.threads import post_to_threads
-from services.instagram import post_to_instagram
+from services.instagram import post_to_instagram, post_to_instagram_story
 
 # Explicit ASGI application instantiation for Uvicorn
 app = FastAPI()
@@ -58,17 +58,35 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
 
     save_article_draft(link, title, drafts.get("threads", ""), "processing")
 
-    results = {"Threads": False, "Instagram": False}
+    results = {
+        "Threads": False,
+        "Instagram Feed": False,
+        "Instagram Story": False
+    }
 
+    # 1. Threads Direct API
     try:
-        results["Threads"] = post_to_threads(drafts.get("threads", ""), feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
+        results["Threads"] = post_to_threads(
+            drafts.get("threads", ""),
+            feed_image if feed_image != DEFAULT_BRAND_IMAGE else None
+        )
     except Exception as e:
         print(f"[!] Threads exception: {e}")
 
+    # 2. Instagram Feed Photo
     try:
-        results["Instagram"] = post_to_instagram(drafts.get("instagram", ""), feed_image)
+        results["Instagram Feed"] = post_to_instagram(
+            drafts.get("instagram", ""),
+            feed_image
+        )
     except Exception as e:
-        print(f"[!] Instagram exception: {e}")
+        print(f"[!] Instagram Feed exception: {e}")
+
+    # 3. Instagram 24-Hour Story
+    try:
+        results["Instagram Story"] = post_to_instagram_story(feed_image)
+    except Exception as e:
+        print(f"[!] Instagram Story exception: {e}")
 
     if any(results.values()):
         mark_article_status(article_data, "published")
