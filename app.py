@@ -1,9 +1,11 @@
+import os
 import time
 import html
 import re
 import requests
 import feedparser
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
 from config import RSS_FEEDS
 from services.database import (
     check_article_exists, is_semantic_duplicate, save_article_draft, get_recent_articles, supabase
@@ -19,6 +21,7 @@ from services.telegram import (
 )
 from services.threads import post_to_threads
 from services.instagram import post_to_instagram, post_to_instagram_story
+from services.story_generator import generate_story_canvas
 
 # Explicit ASGI application instantiation for Uvicorn
 app = FastAPI()
@@ -82,11 +85,17 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     except Exception as e:
         print(f"[!] Instagram Feed exception: {e}")
 
-    # 3. Instagram 24-Hour Story
+    # 3. Instagram Story (Branded 1080x1920 with headline & pill)
     try:
-        results["Instagram Story"] = post_to_instagram_story(feed_image)
+        story_image_url = generate_story_canvas(
+            title=title,
+            image_url=feed_image,
+            category="HUMAN RIGHTS REPORT"
+        )
+        if story_image_url:
+            results["Instagram Story"] = post_to_instagram_story(story_image_url)
     except Exception as e:
-        print(f"[!] Instagram Story exception: {e}")
+        print(f"[!] Instagram Story generation/publish exception: {e}")
 
     if any(results.values()):
         mark_article_status(article_data, "published")
@@ -191,6 +200,15 @@ def rescore_task():
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check(): return {"status": "Online"}
+
+@app.api_route("/media/stories/{filename}", methods=["GET", "HEAD"])
+def serve_story_image(filename: str):
+    """Serves generated story images to Instagram API crawler."""
+    clean_filename = os.path.basename(filename)
+    filepath = os.path.join("/tmp", clean_filename)
+    if os.path.exists(filepath):
+        return FileResponse(filepath, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Story image not found")
 
 @app.api_route("/ingest-feeds", methods=["GET", "HEAD"])
 def trigger_ingestion(background_tasks: BackgroundTasks):
