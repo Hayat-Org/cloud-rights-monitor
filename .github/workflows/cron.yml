@@ -13,15 +13,29 @@ on:
 
   workflow_dispatch:
 
+env:
+  # Override with a repository variable APP_URL if the service moves.
+  APP_URL: ${{ vars.APP_URL || 'https://cloud-rights-monitor.onrender.com' }}
+
 jobs:
   run-monitor-tasks:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Ingestion Task
+      - name: Wake the service (Render free tier cold start)
         run: |
-          curl -s -X GET "https://cloud-rights-monitor.onrender.com/ingest-feeds"
+          curl -sS --fail --retry 6 --retry-delay 15 --retry-all-errors --max-time 90 "$APP_URL/" || true
+
+      - name: Trigger Ingestion Task
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS --fail --retry 3 --retry-delay 20 --max-time 120 \
+            -H "X-Cron-Secret: ${CRON_SECRET}" "$APP_URL/ingest-feeds"
 
       - name: Trigger Peak Publishing Task (Slot Windows Only)
         if: github.event.schedule == '30 12 * * *' || github.event.schedule == '0 17 * * *' || github.event_name == 'workflow_dispatch'
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -s -X GET "https://cloud-rights-monitor.onrender.com/publish-queue"
+          curl -sS --fail --retry 3 --retry-delay 20 --max-time 120 \
+            -H "X-Cron-Secret: ${CRON_SECRET}" "$APP_URL/publish-queue"

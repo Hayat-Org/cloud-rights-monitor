@@ -48,14 +48,18 @@ def process_and_queue_article(title: str, snippet: str, link: str, image_url: st
                 pass
         return {"action": "discarded", "data": item_data}
 
+# Articles whose publish attempt failed are retried in later slots (until they expire).
+PUBLISHABLE_STATUSES = ["pending", "failed_retry"]
+
+
 def get_top_prioritized_queue(limit: int = 4) -> list:
-    """Fetches highest-scoring pending articles from Supabase queue."""
+    """Fetches highest-scoring publishable (pending / failed_retry) articles from Supabase."""
     if not supabase:
         return []
     try:
         res = supabase.table("article_queue") \
             .select("*") \
-            .eq("status", "pending") \
+            .in_("status", PUBLISHABLE_STATUSES) \
             .order("combined_score", desc=True) \
             .limit(limit) \
             .execute()
@@ -71,7 +75,7 @@ def get_queue_status_metrics() -> tuple:
     try:
         res = supabase.table("article_queue") \
             .select("title") \
-            .eq("status", "pending") \
+            .in_("status", PUBLISHABLE_STATUSES) \
             .order("combined_score", desc=True) \
             .execute()
         data = res.data or []
@@ -83,7 +87,7 @@ def get_queue_status_metrics() -> tuple:
         return 0, "N/A"
 
 def clean_expired_queue_items() -> int:
-    """Purges queue items older than 48 hours."""
+    """Purges unpublished (pending / failed_retry) queue items older than 48 hours."""
     if not supabase:
         return 0
     try:
@@ -91,12 +95,46 @@ def clean_expired_queue_items() -> int:
         res = supabase.table("article_queue") \
             .delete() \
             .lt("created_at", cutoff) \
-            .eq("status", "pending") \
+            .in_("status", PUBLISHABLE_STATUSES) \
             .execute()
         return len(res.data) if res.data else 0
     except Exception as e:
         print(f"[!] Expired queue cleanup error: {e}")
         return 0
 
-def rescore_discarded_or_pending_articles() -> dict:
-    return {"rescored_total": 0, "newly_queued": 0, "fast_tracked": 0, "errors": []}
+def rescore_discarded_or_pending_articles(limit: int = 25) -> dict:
+    """
+    Re-scores recent discarded articles (e.g. when AI scoring was down and a neutral
+    default was used). Anything now scoring >= 6.8 is moved back to 'pending' so the next
+    publishing slot can pick it up; >= 8.5 counts as fast-tracked (highest priority).
+    """
+    result = {"rescored_total": 0, "newly_queued": 0, "fast_tracked": 0, "errors": []}
+    if not supabase:
+        return result
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        rows = supabase.table("article_queue") \
+            .select("id,url,title,snippet,combined_score") \
+            .eq("status", "discarded") \
+            .gte("created_at", cutoff) \
+            .order("created_at", desc=True) \
+            .limit(limit) \
+            .execute().data or []
+    except Exception as e:
+        result["errors"].append(f"fetch: {e}")
+        return result
+
+    for row in rows:
+        try:
+            score = calculate_urgency_score(row.get("title", ""), row.get("snippet", ""))
+            result["rescored_total"] += 1
+            update = {"combined_score": score}
+            if score >= 6.8:
+                update["status"] = "pending"
+                result["newly_queued"] += 1
+                if score >= 8.5:
+                    result["fast_tracked"] += 1
+            supabase.table("article_queue").update(update).eq("url", row["url"]).execute()
+        except Exception as e:
+            result["errors"].append(f"{str(row.get('title', ''))[:30]}: {e}")
+    return result
