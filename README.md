@@ -56,8 +56,12 @@ curl -H "X-Cron-Secret: $CRON_SECRET" "https://<your-app>/preview/stories?title=
 
 ### About images
 
-If no real publisher photo can be found, the card is typographic. Synthetic "news photos" are **off by default**
-(`ALLOW_AI_FALLBACK_IMAGES=false`) because AI images of people can be mistaken for real documentation of real events.
+Where a card's picture comes from, in order:
+
+1. **The publisher's own lead photo** (RSS media, Open Graph / Twitter tags, or structured data on the article page; relative URLs and generic logos/placeholders are handled). The publisher is credited in the caption.
+2. **A category illustration** (camera, scales of justice, prison bars, ...) on a typographic card when no real photo exists.
+
+Synthetic "news photos" are **off by default** (`ALLOW_AI_FALLBACK_IMAGES=false`) because AI images of people can be mistaken for real documentation of real events. Stock or search-engine photos are deliberately not used either: an unrelated photo next to an abuse report can wrongly suggest it shows the event or a specific person.
 
 ## Configuration
 

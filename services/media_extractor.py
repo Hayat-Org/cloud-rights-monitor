@@ -1,12 +1,13 @@
 import os
 import re
 import json
+import html as htmllib
 import base64
 import hashlib
 import requests
 from functools import lru_cache
 from config import ALLOW_AI_FALLBACK_IMAGES
-from urllib.parse import quote, quote_plus, urlparse
+from urllib.parse import quote, quote_plus, urlparse, urljoin
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -41,12 +42,72 @@ IGNORED_URL_EXTENSIONS = (
 
 STATIC_FALLBACK_IMAGE = "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?q=80&w=1080&auto=format&fit=crop"
 
+# Sites attach these when an article has no real photo; they are never the story's picture.
+GENERIC_IMAGE_HINTS = [
+    "logo", "placeholder", "default-image", "default_image", "/default.", "default-share",
+    "sprite", "blank.", "spacer", "no-image", "noimage", "missing-image",
+]
+
+
 def is_valid_news_image(url: str) -> bool:
-    """Filters out generic placeholders, icons, and tracking pixels."""
+    """Filters out generic placeholders, logos, icons, and tracking pixels."""
     if not url or not url.startswith("http"):
         return False
     lower_url = url.lower()
-    return not any(blocked in lower_url for blocked in BLOCKED_IMAGE_DOMAINS)
+    if any(blocked in lower_url for blocked in BLOCKED_IMAGE_DOMAINS):
+        return False
+    return not any(hint in lower_url for hint in GENERIC_IMAGE_HINTS)
+
+
+_META_IMAGE_PATTERNS = [
+    r'<meta\s+[^>]*?(?:property|name)=["\'](?:og:image(?::secure_url|:url)?|twitter:image(?::src)?)["\']\s+[^>]*?content=["\']([^"\']+)["\']',
+    r'<meta\s+[^>]*?content=["\']([^"\']+)["\']\s+[^>]*?(?:property|name)=["\'](?:og:image(?::secure_url|:url)?|twitter:image(?::src)?)["\']',
+    r'<link\s+[^>]*?rel=["\'](?:image_src|thumbnail)["\']\s+[^>]*?href=["\']([^"\']+)["\']',
+]
+_JSON_LD = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
+
+
+def _json_ld_images(node) -> list:
+    """Collects every 'image' value (string, list or {url}) from a parsed JSON-LD document."""
+    found = []
+    if isinstance(node, dict):
+        img = node.get("image") or node.get("thumbnailUrl")
+        for item in (img if isinstance(img, list) else [img]):
+            if isinstance(item, str):
+                found.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("url"), str):
+                found.append(item["url"])
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                found.extend(_json_ld_images(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_json_ld_images(item))
+    return found
+
+
+def extract_image_from_html(html_text: str, base_url: str) -> str:
+    """
+    Best lead photo declared by an article page: Open Graph / Twitter / image_src tags first,
+    then structured data (JSON-LD). Relative and protocol-relative URLs are made absolute and
+    generic logos / placeholders are skipped. Returns "" when nothing usable is found.
+    """
+    candidates = []
+    for pattern in _META_IMAGE_PATTERNS:
+        candidates += [m.group(1) for m in re.finditer(pattern, html_text or "", re.I)]
+    for block in _JSON_LD.findall(html_text or ""):
+        try:
+            candidates += _json_ld_images(json.loads(block.strip()))
+        except Exception:
+            continue
+    for raw in candidates:
+        src = htmllib.unescape(raw.strip())
+        if src.startswith("//"):
+            src = "https:" + src
+        src = urljoin(base_url, src)
+        if is_valid_news_image(src):
+            return src
+    return ""
 
 def is_valid_article_url(url: str) -> bool:
     """Filters out script assets, tracking domains, and non-article endpoints."""
@@ -250,22 +311,10 @@ def extract_article_image(entry: dict, article_url: str) -> str:
         try:
             res = requests.get(real_url, headers=HEADERS, timeout=7, allow_redirects=True)
             if res.status_code == 200:
-                html_text = res.text
-
-                # Check meta og:image, twitter:image, or link rel="image_src"
-                patterns = [
-                    r'<meta\s+[^>]*?(?:property|name)=["\'](?:og:image|twitter:image)["\']\s+[^>]*?content=["\']([^"\']+)["\']',
-                    r'<meta\s+[^>]*?content=["\']([^"\']+)["\']\s+[^>]*?(?:property|name)=["\'](?:og:image|twitter:image)["\']',
-                    r'<link\s+[^>]*?rel=["\'](?:image_src|thumbnail)["\']\s+[^>]*?href=["\']([^"\']+)["\']'
-                ]
-
-                for pattern in patterns:
-                    match = re.search(pattern, html_text, re.IGNORECASE)
-                    if match:
-                        img_src = match.group(1).strip()
-                        if is_valid_news_image(img_src):
-                            print(f"[+] Scraped real news lead photo from webpage: {img_src[:40]}...")
-                            return img_src
+                img_src = extract_image_from_html(res.text, res.url or real_url)
+                if img_src:
+                    print(f"[+] Scraped real news lead photo from webpage: {img_src[:40]}...")
+                    return img_src
         except Exception as e:
             print(f"[!] Webpage image scraping error for {real_url[:30]}: {e}")
 

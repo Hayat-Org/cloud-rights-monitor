@@ -165,12 +165,19 @@ def download_image(url: str, timeout: int = 12):
     if not url or not url.startswith("http"):
         return None
     try:
-        resp = requests.get(url, headers=HTTP_HEADERS, timeout=timeout)
+        parts = urlparse(url)
+        # Some CDNs refuse hotlinked images without a Referer from the publisher's own site.
+        headers = {**HTTP_HEADERS, "Referer": f"{parts.scheme}://{parts.netloc}/",
+                   "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}
+        resp = requests.get(url, headers=headers, timeout=timeout)
         if resp.status_code != 200 or len(resp.content) < 2000:
             return None
         img = Image.open(io.BytesIO(resp.content))
         img.load()
         if min(img.size) < 200:  # tiny logos / thumbnails look awful when upscaled
+            return None
+        ratio = img.width / img.height
+        if ratio > 3.0 or ratio < 0.33:  # banners / wordmarks, not a news photo
             return None
         return img.convert("RGB")
     except Exception as e:
