@@ -1,5 +1,7 @@
 import base64
+import json
 import unittest
+from urllib.parse import unquote
 from types import SimpleNamespace
 from unittest import mock
 
@@ -23,7 +25,20 @@ class ValidUrlTests(unittest.TestCase):
         self.assertTrue(me.is_valid_article_url("https://www.hrw.org/news/2026/10/26/some-report"))
 
 
+def _batch_response(url):
+    """Shape of Google's batchexecute reply: a header, a blank line, then a JSON list."""
+    inner = json.dumps(["garturlres", url, 1])
+    rows = [["wrb.fr", "Fbv4je", inner, None, None, None, "generic"], ["di", 12], ["af.httprm", 12, "-1", 5]]
+    return SimpleNamespace(text=")]}'\n\n" + json.dumps(rows) + "\n", status_code=200)
+
+
+SIGNED_PAGE = _page('<c-wiz><div jscontroller="x" data-n-a-sg="SIG123" data-n-a-ts="1761470000"></div></c-wiz>')
+
+
 class ResolveGoogleNewsTests(unittest.TestCase):
+    def setUp(self):
+        me.resolve_google_news_url.cache_clear()
+
     def test_non_google_url_untouched(self):
         self.assertEqual(me.resolve_google_news_url("https://www.hrw.org/a"), "https://www.hrw.org/a")
 
@@ -57,6 +72,52 @@ class ResolveGoogleNewsTests(unittest.TestCase):
         token = base64.urlsafe_b64encode(b"\x08\x13\x22" + bytes([len(real)]) + real.encode() + b"\xd2\x01\x00").decode().rstrip("=")
         with mock.patch.object(me.requests, "get", side_effect=AssertionError("no network expected")):
             self.assertEqual(me.resolve_google_news_url(GN.format(token)), real)
+
+    def test_new_style_link_is_decoded_via_google(self):
+        real = "https://www.hrw.org/news/2026/10/26/mali-report"
+        url = GN.format("AU_newstyle_token")
+        with mock.patch.object(me.requests, "get", return_value=SIGNED_PAGE), \
+                mock.patch.object(me.requests, "post", return_value=_batch_response(real)) as post:
+            self.assertEqual(me.resolve_google_news_url(url), real)
+        sent = unquote(post.call_args.kwargs["data"])
+        for expected in ("AU_newstyle_token", "SIG123", "1761470000", "garturlreq"):
+            self.assertIn(expected, sent)
+
+    def test_unparseable_response_still_found_by_fallback_pattern(self):
+        real = "https://cpj.org/2026/10/some-story/"
+        garbled = SimpleNamespace(text='garbage \\"garturlres\\",\\"' + real + '\\",1', status_code=200)
+        with mock.patch.object(me.requests, "get", return_value=SIGNED_PAGE), \
+                mock.patch.object(me.requests, "post", return_value=garbled):
+            self.assertEqual(me.resolve_google_news_url(GN.format("AU_garbled_token")), real)
+
+    def test_missing_signature_keeps_original_and_skips_post(self):
+        url = GN.format("AU_nosig_token")
+        with mock.patch.object(me.requests, "get", return_value=_page("<html>consent page</html>")), \
+                mock.patch.object(me.requests, "post") as post:
+            self.assertEqual(me.resolve_google_news_url(url), url)
+        post.assert_not_called()
+
+    def test_decoded_google_url_is_rejected(self):
+        url = GN.format("AU_googleurl_token")
+        with mock.patch.object(me.requests, "get", return_value=SIGNED_PAGE), \
+                mock.patch.object(me.requests, "post", return_value=_batch_response(FONTS)):
+            self.assertEqual(me.resolve_google_news_url(url), url)
+
+    def test_post_error_keeps_original(self):
+        url = GN.format("AU_posterror_token")
+        with mock.patch.object(me.requests, "get", return_value=SIGNED_PAGE), \
+                mock.patch.object(me.requests, "post", side_effect=RuntimeError("429")):
+            self.assertEqual(me.resolve_google_news_url(url), url)
+
+    def test_result_is_cached_per_link(self):
+        real = "https://www.hrw.org/news/2026/10/26/mali-report"
+        url = GN.format("AU_cached_token")
+        with mock.patch.object(me.requests, "get", return_value=SIGNED_PAGE) as get, \
+                mock.patch.object(me.requests, "post", return_value=_batch_response(real)):
+            me.resolve_google_news_url(url)
+            calls_after_first = get.call_count
+            self.assertEqual(me.resolve_google_news_url(url), real)
+        self.assertEqual(get.call_count, calls_after_first)
 
     def test_network_error_returns_original(self):
         url = GN.format("AU_eeeeeeee")
