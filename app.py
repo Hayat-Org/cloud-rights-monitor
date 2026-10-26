@@ -20,8 +20,9 @@ from services.queue_manager import (
 )
 from services.telegram import (
     send_telegram_notification, send_ingestion_summary, send_publishing_summary,
-    send_telegram_message, send_telegram_photo
+    send_telegram_message, send_telegram_photo, send_failure_alert, send_credential_alert
 )
+from services.diagnostics import pop_errors, check_credentials
 from services.threads import post_to_threads
 from services.instagram import post_to_instagram, post_to_instagram_story
 from services.card_generator import (
@@ -113,13 +114,15 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     except Exception as e:
         print(f"[!] Instagram Story publish exception: {e}")
 
+    errors = pop_errors()
     if any(results.values()):
         mark_article_status(article_data, "published")
-        send_telegram_notification(threads_text, title, results)
+        send_telegram_notification(threads_text, title, results, errors)
         if feed_card_url:
             send_telegram_photo(feed_card_url, f"Published card: {title[:120]}")
     else:
         mark_article_status(article_data, "failed_retry")
+        send_failure_alert(title, errors)
 
     return results
 
@@ -191,6 +194,10 @@ def ingest_feeds_task():
 
 def publish_queue_task():
     print("[*] Starting scheduled peak-window publication...")
+    problems = check_credentials()
+    if problems:
+        print(f"[!] Credential problems: {problems}")
+        send_credential_alert(problems)
     recent_topics = get_recent_articles(limit=15)
     batch = get_top_prioritized_queue(limit=PUBLISH_BATCH_SIZE)
     run_errors = []
@@ -217,7 +224,9 @@ def rescore_task():
     send_telegram_message(msg)
 
 @app.api_route("/", methods=["GET", "HEAD"])
-def health_check(): return {"status": "Online"}
+def health_check():
+    # RENDER_GIT_COMMIT is set by Render: shows which version is actually deployed.
+    return {"status": "Online", "commit": os.getenv("RENDER_GIT_COMMIT", "")[:7]}
 
 ALLOWED_MEDIA_KINDS = {"feed", "stories"}
 
@@ -253,6 +262,14 @@ def preview_card(
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90)
     return Response(content=buf.getvalue(), media_type="image/jpeg")
+
+@app.get("/diagnostics", dependencies=[Depends(require_secret)])
+def diagnostics():
+    """Checks Threads/Instagram tokens and account ids. Disabled unless CRON_SECRET is set."""
+    if not CRON_SECRET:
+        raise HTTPException(status_code=404, detail="Disabled (set CRON_SECRET to enable)")
+    problems = check_credentials()
+    return {"ok": not problems, "problems": problems}
 
 @app.api_route("/ingest-feeds", methods=["GET", "HEAD"], dependencies=[Depends(require_secret)])
 def trigger_ingestion(background_tasks: BackgroundTasks):

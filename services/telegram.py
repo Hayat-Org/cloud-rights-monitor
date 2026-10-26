@@ -38,7 +38,7 @@ def send_telegram_message(message: str) -> bool:
         print(f"[!] Telegram send error: {e}")
         return False
 
-def send_telegram_notification(draft_text: str, title: str, results: dict):
+def send_telegram_notification(draft_text: str, title: str, results: dict, errors: dict = None):
     threads_status = "✅" if results.get("Threads") else "❌"
     ig_feed_status = "✅" if results.get("Instagram Feed") else "❌"
     ig_story_status = "✅" if results.get("Instagram Story") else "❌"
@@ -52,7 +52,19 @@ def send_telegram_notification(draft_text: str, title: str, results: dict):
         f"{ig_story_status} Instagram Story\n\n"
         f"📝 *Draft Overview:*\n{escape_md(draft_text[:300])}..."
     )
+    if errors:
+        msg += "\n\n⚠️ *Errors:*\n" + "\n".join(f"• {k}: {escape_md(v[:160])}" for k, v in errors.items())
     send_telegram_message(msg)
+
+
+def send_failure_alert(title: str, errors: dict):
+    """Sent when an article could not be published ANYWHERE (previously silent)."""
+    detail = "\n".join(f"• {k}: {escape_md(v[:200])}" for k, v in errors.items()) or "• No error details captured."
+    send_telegram_message(f"❌ *PUBLISH FAILED*\n\n📌 {escape_md(title[:120])}\n\n{detail}")
+
+
+def send_credential_alert(problems: list):
+    send_telegram_message("🔑 *CREDENTIAL CHECK FAILED*\n\n" + "\n".join(f"• {escape_md(p)}" for p in problems))
 
 def send_ingestion_summary(stats: dict, run_errors: list):
     err_text = "\n".join(run_errors) if run_errors else "No errors. All systems optimal."

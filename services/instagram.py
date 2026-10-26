@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+from services.diagnostics import record_error
 from config import IG_USER_ID, INSTAGRAM_ACCESS_TOKEN as CONFIG_IG_TOKEN
 
 # Legacy default kept so existing deployments that never set the env var keep working.
@@ -24,9 +25,11 @@ def _wait_and_publish(container_id: str, user_id: str, access_token: str) -> boo
             break
         elif status == "ERROR":
             print(f"[!] Instagram container processing failed: {check_res}")
+            record_error("Instagram", check_res)
             return False
     else:
         print("[!] Instagram container processing timed out.")
+        record_error("Instagram", "container processing timed out")
         return False
 
     publish_url = f"https://graph.instagram.com/{API_VERSION}/{user_id}/media_publish"
@@ -41,6 +44,7 @@ def _wait_and_publish(container_id: str, user_id: str, access_token: str) -> boo
         return True
 
     print(f"[!] Instagram Media Publish Failed: {pub_res}")
+    record_error("Instagram", pub_res.get("error", pub_res))
     return False
 
 def _create_container(url: str, payload: dict, attempts: int = 2) -> dict:
@@ -81,6 +85,7 @@ def post_to_instagram(caption: str, image_url: str) -> bool:
         res = _create_container(url, payload)
         if "id" not in res:
             print(f"[!] Instagram Feed Container Creation Failed: {res}")
+            record_error("Instagram Feed", res.get("error", res))
             return False
         return _wait_and_publish(res["id"], user_id, access_token)
     except Exception as e:
@@ -107,6 +112,7 @@ def post_to_instagram_story(image_url: str) -> bool:
         res = _create_container(url, payload)
         if "id" not in res:
             print(f"[!] Instagram Story Container Creation Failed: {res}")
+            record_error("Instagram Story", res.get("error", res))
             return False
         return _wait_and_publish(res["id"], user_id, access_token)
     except Exception as e:

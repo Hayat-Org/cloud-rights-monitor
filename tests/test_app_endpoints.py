@@ -23,7 +23,9 @@ class EndpointTests(unittest.TestCase):
         app_module.CRON_SECRET = self._orig_secret
 
     def test_health(self):
-        self.assertEqual(self.client.get("/").json(), {"status": "Online"})
+        body = self.client.get("/").json()
+        self.assertEqual(body["status"], "Online")
+        self.assertIn("commit", body)
 
     def test_media_serves_saved_card_and_blocks_traversal(self):
         folder = os.path.join(d.MEDIA_DIR, "stories")
@@ -37,6 +39,10 @@ class EndpointTests(unittest.TestCase):
     def test_preview_disabled_without_secret(self):
         app_module.CRON_SECRET = ""
         self.assertEqual(self.client.get("/preview/feed").status_code, 404)
+
+    def test_diagnostics_disabled_without_secret(self):
+        app_module.CRON_SECRET = ""
+        self.assertEqual(self.client.get("/diagnostics").status_code, 404)
 
     def test_secret_required_when_configured(self):
         app_module.CRON_SECRET = "s3cret"
