@@ -127,3 +127,71 @@ class ResolveGoogleNewsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageImageTests(unittest.TestCase):
+    BASE = "https://www.example.org/news/2026/story"
+
+    def test_relative_og_image_made_absolute(self):
+        html = '<meta property="og:image" content="/media/2026/photo.jpg">'
+        self.assertEqual(me.extract_image_from_html(html, self.BASE), "https://www.example.org/media/2026/photo.jpg")
+
+    def test_protocol_relative_and_entities(self):
+        html = '<meta name="twitter:image" content="//cdn.example.org/p.jpg?a=1&amp;b=2">'
+        self.assertEqual(me.extract_image_from_html(html, self.BASE), "https://cdn.example.org/p.jpg?a=1&b=2")
+
+    def test_content_before_property_order(self):
+        html = '<meta content="https://img.example.org/a.jpg" property="og:image">'
+        self.assertEqual(me.extract_image_from_html(html, self.BASE), "https://img.example.org/a.jpg")
+
+    def test_generic_logo_skipped_for_json_ld_photo(self):
+        html = ('<meta property="og:image" content="https://www.example.org/static/site-logo.png">'
+                '<script type="application/ld+json">{"@type":"NewsArticle","image":{"url":"https://img.example.org/real.jpg"}}</script>')
+        self.assertEqual(me.extract_image_from_html(html, self.BASE), "https://img.example.org/real.jpg")
+
+    def test_json_ld_list_and_graph(self):
+        html = ('<script type="application/ld+json">{"@graph":[{"@type":"WebPage"},'
+                '{"@type":"NewsArticle","image":["https://img.example.org/one.jpg","https://img.example.org/two.jpg"]}]}</script>')
+        self.assertEqual(me.extract_image_from_html(html, self.BASE), "https://img.example.org/one.jpg")
+
+    def test_bad_json_ld_ignored_and_nothing_found(self):
+        self.assertEqual(me.extract_image_from_html('<script type="application/ld+json">{oops</script>', self.BASE), "")
+        self.assertEqual(me.extract_image_from_html("", self.BASE), "")
+
+    def test_placeholders_rejected(self):
+        for u in ("https://x.org/img/placeholder.jpg", "https://x.org/default-share.png", "https://x.org/a/no-image.png"):
+            self.assertFalse(me.is_valid_news_image(u), u)
+        self.assertTrue(me.is_valid_news_image("https://x.org/uploads/2026/10/protest-crowd.jpg"))
+
+
+class DownloadImageTests(unittest.TestCase):
+    @staticmethod
+    def _png(size):
+        import io, random
+        from PIL import Image
+        random.seed(1)
+        img = Image.new("RGB", size)
+        img.putdata([(random.randrange(256), random.randrange(256), random.randrange(256)) for _ in range(size[0] * size[1])])
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+
+    def _get(self, size, status=200):
+        return SimpleNamespace(status_code=status, content=self._png(size))
+
+    def test_normal_photo_accepted_and_referer_sent(self):
+        from services import card_design as d
+        with mock.patch.object(d.requests, "get", return_value=self._get((600, 400))) as get:
+            self.assertIsNotNone(d.download_image("https://cdn.example.org/a/photo.jpg"))
+        self.assertEqual(get.call_args.kwargs["headers"]["Referer"], "https://cdn.example.org/")
+
+    def test_wide_banner_and_tall_strip_rejected(self):
+        from services import card_design as d
+        for size in ((1600, 300), (250, 900)):
+            with mock.patch.object(d.requests, "get", return_value=self._get(size)):
+                self.assertIsNone(d.download_image("https://cdn.example.org/x.png"), size)
+
+    def test_error_status_rejected(self):
+        from services import card_design as d
+        with mock.patch.object(d.requests, "get", return_value=self._get((600, 400), status=403)):
+            self.assertIsNone(d.download_image("https://cdn.example.org/x.png"))

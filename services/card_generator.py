@@ -13,6 +13,7 @@ random stock/AI picture, so the grid always stays on-brand and honest.
 from PIL import Image, ImageDraw, ImageFilter
 
 from services import card_design as d
+from services.card_glyphs import glyph_for
 
 FEED_SIZE = (1080, 1350)
 STORY_SIZE = (1080, 1920)
@@ -23,8 +24,8 @@ STORY_SAFE_BOTTOM = 1580
 MARGIN = 72
 
 
-def _typographic_backdrop(width: int, height: int, accent: tuple) -> Image.Image:
-    """Photo-less background: navy gradient, accent glow and a large watermark mark."""
+def _typographic_backdrop(width: int, height: int, accent: tuple, label: str = "") -> Image.Image:
+    """Photo-less background: navy gradient, accent glow and a large category illustration."""
     bg = d.vertical_gradient(width, height, d.NAVY_SOFT + (255,), d.NAVY + (255,))
     glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
@@ -32,8 +33,8 @@ def _typographic_backdrop(width: int, height: int, accent: tuple) -> Image.Image
     glow = glow.filter(ImageFilter.GaussianBlur(max(width // 8, 40)))
     bg = Image.alpha_composite(bg, glow)
     mark = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    d.draw_brand_mark(ImageDraw.Draw(mark), int(width * 0.72), int(height * 0.30), int(width * 0.32),
-                      color=accent + (30,))
+    glyph_for(label)(ImageDraw.Draw(mark), int(width * 0.67), int(height * 0.255), int(width * 0.22),
+                     accent + (40,))
     return Image.alpha_composite(bg, mark)
 
 
@@ -72,7 +73,7 @@ def render_feed_card(title: str, snippet: str = "", image_url: str = None,
         canvas = Image.alpha_composite(canvas, _paste_layer(
             d.vertical_gradient(w, 360, d.NAVY + (0,), d.NAVY + (255,)), (0, photo_h - 360), (w, h)))
     else:
-        canvas.paste(_typographic_backdrop(w, h, accent), (0, 0))
+        canvas.paste(_typographic_backdrop(w, h, accent, label), (0, 0))
 
     draw = ImageDraw.Draw(canvas)
     _brand_header(draw, MARGIN, 56, w - MARGIN, d.today_label())
@@ -118,7 +119,7 @@ def render_story_card(title: str, snippet: str = "", image_url: str = None,
         canvas = Image.alpha_composite(canvas, _paste_layer(
             d.vertical_gradient(w, 900, d.NAVY + (0,), d.NAVY + (245,)), (0, h - 900), (w, h)))
     else:
-        canvas = _typographic_backdrop(w, h, accent)
+        canvas = _typographic_backdrop(w, h, accent, label)
 
     draw = ImageDraw.Draw(canvas)
     _brand_header(draw, MARGIN, STORY_SAFE_TOP, w - MARGIN, d.today_label())
