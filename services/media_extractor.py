@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 import hashlib
 import requests
 from config import ALLOW_AI_FALLBACK_IMAGES
@@ -26,6 +27,12 @@ IGNORED_URL_PATTERNS = [
     "scorecardresearch.com", "adnxs.com", "criteo.com", "twitter.com/widgets"
 ]
 
+# Hosts owned by Google: assets, fonts, support pages... never an article's publisher.
+GOOGLE_HOST_SUFFIXES = (
+    "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "ggpht.com",
+    "googleadservices.com", "googlesyndication.com", "googletagmanager.com", "youtube.com", "g.co",
+)
+
 IGNORED_URL_EXTENSIONS = (
     ".js", ".css", ".json", ".xml", ".ico", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"
 )
@@ -44,29 +51,61 @@ def is_valid_article_url(url: str) -> bool:
     if not url or not url.startswith("http"):
         return False
     lower = url.lower()
-    path = urlparse(url).path.lower()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if any(host == suffix or host.endswith("." + suffix) for suffix in GOOGLE_HOST_SUFFIXES):
+        return False
+    path = parsed.path.lower()
     if any(path.endswith(ext) for ext in IGNORED_URL_EXTENSIONS):
         return False
     if any(pattern in lower for pattern in IGNORED_URL_PATTERNS):
         return False
     return True
 
+def _decode_google_news_token(url: str) -> str:
+    """
+    Older Google News links (.../rss/articles/CBMi...) embed the publisher URL inside a
+    base64 token, so it can be recovered without any network request. Newer tokens do not,
+    in which case "" is returned.
+    """
+    try:
+        token = urlparse(url).path.rstrip("/").split("/")[-1]
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+        match = re.search(rb"https?://[\x21-\x7e]+", raw)
+        if match:
+            candidate = match.group(0).decode("ascii", "ignore")
+            if is_valid_article_url(candidate):
+                return candidate
+    except Exception:
+        pass
+    return ""
+
+
 def resolve_google_news_url(url: str) -> str:
-    """Unwraps Google News RSS redirect links to extract the actual publisher website URL."""
+    """
+    Unwraps a Google News RSS link to the publisher URL. If the real URL cannot be
+    determined it returns the ORIGINAL link (which is unique per article), never a
+    guessed URL: a wrong guess shared by many articles makes the duplicate check treat
+    every one of them as "already processed".
+    """
     if not url or "news.google.com" not in url:
         return url
+
+    decoded = _decode_google_news_token(url)
+    if decoded:
+        return decoded
+
     try:
         res = requests.get(url, headers=HEADERS, timeout=8, allow_redirects=True)
-        # Check if HTTP redirection already resolved to the real domain
+        # HTTP redirect already landed on the publisher
         if res.url and "news.google.com" not in res.url and is_valid_article_url(res.url):
             print(f"[+] HTTP Redirect resolved real publisher: {res.url[:50]}...")
             return res.url
 
         if res.status_code == 200:
-            # Extract HTML anchor tags and URLs
-            found_urls = re.findall(r'https?://[^\s<>"\'\\]+', res.text)
-            for link in found_urls:
-                if is_valid_article_url(link):
+            # Only accept real article-looking links (a path, not a bare domain)
+            for link in re.findall(r'https?://[^\s<>"\'\\]+', res.text):
+                if is_valid_article_url(link) and len(urlparse(link).path.strip("/")) > 8:
                     print(f"[+] Unwrapped Google News link to real publisher: {link[:50]}...")
                     return link
     except Exception as e:
