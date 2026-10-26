@@ -83,6 +83,11 @@ Generate JSON output with keys "threads" and "instagram".
 Rules:
 - "threads": Short, compelling post, max 400 characters, no hashtags.
 - "instagram": Engaging narrative with 3-5 relevant hashtags at the bottom.
+- Write as a neutral news page, always in the THIRD person. Never write "I", "my", "we" or "join me",
+  even when the headline is a first-person testimony: report it as "X says ..." or "According to <source> ...".
+- Use ONLY facts stated in the title and snippet. Do not invent details, places, quotes, numbers or
+  emotional scene-setting. If the snippet is thin, write a shorter, plainer post instead of embellishing.
+- Attribute claims and accusations to the organisation or person making them.
 
 Return ONLY raw JSON in this format:
 {{

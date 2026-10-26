@@ -8,6 +8,7 @@ from services.card_design import clean_headline
 THREADS_LIMIT = 490          # API hard limit is 500 characters
 INSTAGRAM_LIMIT = 2200       # caption hard limit
 MAX_HASHTAGS = 8
+MAX_LINK_CHARS = 100         # longer links (e.g. Google News tokens) would crowd out the text
 DEFAULT_HASHTAGS = ["#HumanRights", "#Justice", "#PressFreedom", "#GlobalNews"]
 
 
@@ -51,7 +52,7 @@ def build_threads_caption(text: str, link: str = "", source: str = "") -> str:
     tail_parts = []
     if source:
         tail_parts.append(f"Source: {source}")
-    if link:
+    if link and len(link) <= MAX_LINK_CHARS:
         tail_parts.append(link)
     tail = "\n\n" + "\n".join(tail_parts) if tail_parts else ""
     room = THREADS_LIMIT - len(tail)

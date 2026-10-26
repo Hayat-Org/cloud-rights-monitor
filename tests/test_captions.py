@@ -10,6 +10,15 @@ class CaptionTests(unittest.TestCase):
         self.assertIn("Source: Human Rights Watch", out)
         self.assertTrue(out.endswith("https://hrw.org/a"))
 
+    def test_long_google_news_link_is_omitted_and_body_kept(self):
+        link = "https://news.google.com/rss/articles/" + "CBMi" * 60
+        body = "NYT attorney David McCraw warns that press freedom is under pressure. " * 3
+        out = c.build_threads_caption(body, link=link, source="The Duke Chronicle")
+        self.assertNotIn("news.google.com", out)
+        self.assertIn("Source: The Duke Chronicle", out)
+        self.assertGreater(len(out), 200)  # body is no longer squeezed out by the link
+        self.assertLessEqual(len(out), 500)
+
     def test_threads_strips_hashtags(self):
         self.assertNotIn("#", c.build_threads_caption("Hello #world #rights"))
 

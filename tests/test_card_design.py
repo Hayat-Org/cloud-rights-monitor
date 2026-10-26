@@ -29,6 +29,12 @@ class TextHelpersTests(unittest.TestCase):
     def test_clean_headline_empty(self):
         self.assertEqual(d.clean_headline(""), "Human rights update")
 
+    def test_outlet_from_title(self):
+        self.assertEqual(d.outlet_from_title("Europe honors war crimes court as Washington squeezes its finances - Courthouse News"), "Courthouse News")
+        self.assertEqual(d.outlet_from_title("Can machines be war criminals? - Vox"), "Vox")
+        self.assertEqual(d.outlet_from_title("Hope - and fear"), "")
+        self.assertEqual(d.outlet_from_title("Uganda: Ensure justice for the killing of a dissident"), "")
+
     def test_source_label_known_and_unknown(self):
         self.assertEqual(d.source_label("https://www.hrw.org/news/2026/x"), "Human Rights Watch")
         self.assertEqual(d.source_label("https://news.un.org/en/story/1"), "UN News")

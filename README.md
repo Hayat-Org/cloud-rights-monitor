@@ -40,7 +40,7 @@ Every post uses the same template so the profile grid stays consistent:
 
 * **Photo** (publisher image, cropped) fading into a navy text panel, or a **typographic card** when no real photo exists.
 * **Category pill** detected from the headline (Press Freedom, War Crimes, Political Prisoners, …) with its own accent colour.
-* **Auto-fitted headline**, **source credit** (HRW, Amnesty, …), date, and account handle.
+* **Auto-fitted headline**, date, and account handle. The publisher is credited in the caption ("Source: …"), not on the image.
 * **Story** variant respects Instagram's UI safe zones (top 270 px / bottom 340 px).
 
 Tweak look and feel in `services/card_design.py` (colours, categories, source names) and layout in

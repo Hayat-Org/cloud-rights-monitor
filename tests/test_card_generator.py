@@ -36,6 +36,14 @@ class RenderTests(unittest.TestCase):
             self.assertEqual(g.render_feed_card(long_title).size, g.FEED_SIZE)
             self.assertEqual(g.render_story_card(long_title).size, g.STORY_SIZE)
 
+    def test_source_is_not_drawn_on_cards(self):
+        """The publisher is credited in the caption only, so the pixels must not depend on it."""
+        with mock.patch.object(d, "download_image", lambda *a, **k: None):
+            for render in (g.render_feed_card, g.render_story_card):
+                with_src = render("Same headline", "", None, "Amnesty International")
+                without = render("Same headline", "", None, "")
+                self.assertEqual(with_src.tobytes(), without.tobytes(), render.__name__)
+
     def test_story_text_stays_inside_safe_zone(self):
         # The footer block is the lowest element; it must end above the IG UI zone.
         self.assertLessEqual(g.STORY_SAFE_BOTTOM, g.STORY_SIZE[1] - 300)
