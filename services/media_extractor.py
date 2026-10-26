@@ -1,10 +1,12 @@
 import os
 import re
+import json
 import base64
 import hashlib
 import requests
+from functools import lru_cache
 from config import ALLOW_AI_FALLBACK_IMAGES
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote, quote_plus, urlparse
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -81,6 +83,69 @@ def _decode_google_news_token(url: str) -> str:
     return ""
 
 
+_GN_SIGNATURE = re.compile(r'data-n-a-sg="([^"]+)"')
+_GN_TIMESTAMP = re.compile(r'data-n-a-ts="([^"]+)"')
+_GN_DECODED = re.compile(r'garturlres\\*",\\*"(https?://[^"\\]+)')
+GN_BATCH_URL = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
+
+
+def _decode_via_google(url: str) -> str:
+    """
+    Newer Google News links (.../rss/articles/AU_yqL...) cannot be decoded offline. The Google
+    News web app itself turns them into the publisher URL with one internal request, which we
+    repeat here: read the signature/timestamp from the article page, then call batchexecute.
+    Best effort only: any problem (layout change, consent page, rate limit) returns "" and the
+    caller keeps the original link.
+    """
+    try:
+        parts = urlparse(url).path.rstrip("/").split("/")
+        if len(parts) < 2 or parts[-2] not in ("articles", "read"):
+            return ""
+        article_id = parts[-1]
+
+        signature = timestamp = None
+        for endpoint in (f"https://news.google.com/articles/{article_id}",
+                         f"https://news.google.com/rss/articles/{article_id}"):
+            page = requests.get(endpoint, headers=HEADERS, timeout=8)
+            sig, ts = _GN_SIGNATURE.search(page.text or ""), _GN_TIMESTAMP.search(page.text or "")
+            if sig and ts:
+                signature, timestamp = sig.group(1), ts.group(1)
+                break
+        if not signature:
+            print("[!] Google News decode: signature not found on article page")
+            return ""
+
+        inner = ('["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,null,null,null,0,1],'
+                 f'"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{article_id}",{timestamp},"{signature}"]')
+        body = "f.req=" + quote(json.dumps([[["Fbv4je", inner]]]))
+        resp = requests.post(
+            GN_BATCH_URL, data=body, timeout=8,
+            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        )
+        text = resp.text or ""
+
+        decoded = ""
+        try:  # normal case: the 2nd block of the response is a JSON list holding a JSON string
+            rows = json.loads(text.split("\n\n")[1])
+            for row in rows:
+                if isinstance(row, list) and len(row) > 2 and row[1] == "Fbv4je" and row[2]:
+                    decoded = json.loads(row[2])[1]
+                    break
+        except Exception:
+            decoded = ""
+        if not decoded:  # tolerant fallback: pick the URL out of the raw text
+            m = _GN_DECODED.search(text)
+            decoded = m.group(1) if m else ""
+
+        if decoded and is_valid_article_url(decoded):
+            return decoded
+        print(f"[!] Google News decode: no usable URL in response (HTTP {resp.status_code})")
+    except Exception as e:
+        print(f"[!] Google News decode failed: {str(e)[:80]}")
+    return ""
+
+
+@lru_cache(maxsize=1024)
 def resolve_google_news_url(url: str) -> str:
     """
     Unwraps a Google News RSS link to the publisher URL. If the real URL cannot be
@@ -93,6 +158,11 @@ def resolve_google_news_url(url: str) -> str:
 
     decoded = _decode_google_news_token(url)
     if decoded:
+        return decoded
+
+    decoded = _decode_via_google(url)
+    if decoded:
+        print(f"[+] Decoded Google News link -> {urlparse(decoded).hostname}")
         return decoded
 
     try:

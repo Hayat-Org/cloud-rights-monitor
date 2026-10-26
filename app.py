@@ -151,9 +151,14 @@ def ingest_feeds_task():
                 if not raw_link:
                     continue
 
-                real_link = resolve_google_news_url(raw_link)
+                # Cheap checks first (no network): known title / link / near-duplicate headline.
+                if check_article_exists(raw_link, raw_title) or is_semantic_duplicate(raw_title, threshold=0.70):
+                    print(f"[*] Article already processed/published: '{raw_title[:35]}...'")
+                    continue
 
-                if check_article_exists(real_link, raw_title) or is_semantic_duplicate(raw_title, threshold=0.70):
+                # Only genuinely new items pay for the Google News -> publisher lookup.
+                real_link = resolve_google_news_url(raw_link)
+                if real_link != raw_link and check_article_exists(real_link, raw_title):
                     print(f"[*] Article already processed/published: '{raw_title[:35]}...'")
                     continue
 
