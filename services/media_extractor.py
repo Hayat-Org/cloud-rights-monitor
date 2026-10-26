@@ -1,6 +1,8 @@
 import os
 import re
+import hashlib
 import requests
+from config import ALLOW_AI_FALLBACK_IMAGES
 from urllib.parse import quote_plus, urlparse
 
 HEADERS = {
@@ -89,7 +91,7 @@ def generate_ai_news_image(title: str) -> str:
     clean_title = re.sub(r'[^a-zA-Z0-9 ]', '', title).strip()
     prompt = f"Editorial press photo for news agency report about {clean_title[:90]}. Professional photojournalism, authentic documentary style, natural lighting, candid 35mm news photograph, realistic scene, no text, no CGI, no fantasy art"
     encoded_prompt = quote_plus(prompt)
-    seed = abs(hash(title)) % 100000
+    seed = int(hashlib.md5(title.encode()).hexdigest(), 16) % 100000  # stable across restarts
 
     ai_image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1080&model=flux&nologo=true&seed={seed}"
     print(f"[*] Generated documentary AI fallback: {ai_image_url[:80]}...")
@@ -158,5 +160,8 @@ def extract_article_image(entry: dict, article_url: str) -> str:
         except Exception as e:
             print(f"[!] Webpage image scraping error for {real_url[:30]}: {e}")
 
-    # 5. Fallback: Pre-warmed AI photojournalistic image
-    return generate_ai_news_image(entry.get('title', 'human rights news report'))
+    # 5. No real photo found. By default return "" so the branded typographic card is used
+    #    (see services/card_generator.py). Synthetic photos are opt-in via ALLOW_AI_FALLBACK_IMAGES.
+    if ALLOW_AI_FALLBACK_IMAGES:
+        return generate_ai_news_image(entry.get('title', 'human rights news report'))
+    return ""

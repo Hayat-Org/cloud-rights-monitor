@@ -1,0 +1,3 @@
+pytest>=8.0
+# fastapi==0.109 / starlette TestClient is incompatible with httpx>=0.28
+httpx>=0.26,<0.28

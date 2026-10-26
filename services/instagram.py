@@ -1,9 +1,11 @@
 import os
 import time
 import requests
+from config import IG_USER_ID, INSTAGRAM_ACCESS_TOKEN as CONFIG_IG_TOKEN
 
-INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "17841438996464898").strip()
-INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+# Legacy default kept so existing deployments that never set the env var keep working.
+INSTAGRAM_USER_ID = IG_USER_ID or "17841438996464898"
+INSTAGRAM_ACCESS_TOKEN = CONFIG_IG_TOKEN
 API_VERSION = "v21.0"
 
 def _wait_and_publish(container_id: str, user_id: str, access_token: str) -> bool:
@@ -41,6 +43,24 @@ def _wait_and_publish(container_id: str, user_id: str, access_token: str) -> boo
     print(f"[!] Instagram Media Publish Failed: {pub_res}")
     return False
 
+def _create_container(url: str, payload: dict, attempts: int = 2) -> dict:
+    """POSTs a media container; retries once on transient (5xx / rate-limit / network) errors."""
+    last = {}
+    for attempt in range(attempts):
+        try:
+            res = requests.post(url, data=payload, timeout=20)
+            last = res.json()
+            err = last.get("error", {}) if isinstance(last, dict) else {}
+            transient = res.status_code >= 500 or err.get("is_transient") or err.get("code") in (1, 2, 4, 17)
+            if "id" in last or not transient:
+                return last
+        except Exception as e:
+            last = {"error": {"message": str(e)}}
+        if attempt < attempts - 1:
+            time.sleep(4)
+    return last
+
+
 def post_to_instagram(caption: str, image_url: str) -> bool:
     """Publishes a regular feed photo post with a caption."""
     user_id = os.getenv("INSTAGRAM_USER_ID", "").strip() or INSTAGRAM_USER_ID
@@ -58,7 +78,7 @@ def post_to_instagram(caption: str, image_url: str) -> bool:
     }
 
     try:
-        res = requests.post(url, data=payload, timeout=20).json()
+        res = _create_container(url, payload)
         if "id" not in res:
             print(f"[!] Instagram Feed Container Creation Failed: {res}")
             return False
@@ -84,7 +104,7 @@ def post_to_instagram_story(image_url: str) -> bool:
     }
 
     try:
-        res = requests.post(url, data=payload, timeout=20).json()
+        res = _create_container(url, payload)
         if "id" not in res:
             print(f"[!] Instagram Story Container Creation Failed: {res}")
             return False

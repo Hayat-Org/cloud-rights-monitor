@@ -1,5 +1,27 @@
+import re
 import requests
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+
+def escape_md(text: str) -> str:
+    """Escapes legacy-Markdown control characters so headlines can't break the message."""
+    return re.sub(r"([_*`\[])", r"\\\1", text or "")
+
+
+def send_telegram_photo(image_url: str, caption: str = "") -> bool:
+    """Sends the generated card to the admin chat for a quick visual check."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or not image_url:
+        return False
+    try:
+        res = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+            json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url, "caption": caption[:1000]},
+            timeout=15,
+        )
+        return res.status_code == 200
+    except Exception as e:
+        print(f"[!] Telegram photo error: {e}")
+        return False
 
 def send_telegram_message(message: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -8,6 +30,9 @@ def send_telegram_message(message: str) -> bool:
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
         res = requests.post(url, json=payload, timeout=8)
+        if res.status_code == 400:  # usually "can't parse entities": resend as plain text
+            payload.pop("parse_mode")
+            res = requests.post(url, json=payload, timeout=8)
         return res.status_code == 200
     except Exception as e:
         print(f"[!] Telegram send error: {e}")
@@ -20,12 +45,12 @@ def send_telegram_notification(draft_text: str, title: str, results: dict):
 
     msg = (
         f"📣 *AUTO-PUBLISH SUMMARY*\n\n"
-        f"📌 *Headline:* {title[:120]}\n\n"
+        f"📌 *Headline:* {escape_md(title[:120])}\n\n"
         f"📊 *Platform Status:*\n"
         f"{threads_status} Threads\n"
         f"{ig_feed_status} Instagram Feed\n"
         f"{ig_story_status} Instagram Story\n\n"
-        f"📝 *Draft Overview:*\n{draft_text[:300]}..."
+        f"📝 *Draft Overview:*\n{escape_md(draft_text[:300])}..."
     )
     send_telegram_message(msg)
 
@@ -55,7 +80,7 @@ def send_publishing_summary(published_items: list, remaining_count: int, next_up
         f"• Total processed in window: {pub_count}\n\n"
         f"📦 *Queue Status Remaining:*\n"
         f"• Items Still in Queue: {remaining_count}\n"
-        f"• Next Up: {next_up_title[:50]}\n\n"
+        f"• Next Up: {escape_md(next_up_title[:50])}\n\n"
         f"⚠️ *Diagnostics Log:*\n`{err_text}`"
     )
     send_telegram_message(msg)

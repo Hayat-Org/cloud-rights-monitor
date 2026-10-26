@@ -1,12 +1,14 @@
+import io
 import os
 import time
 import html
 import re
 import requests
 import feedparser
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse
-from config import RSS_FEEDS
+import hmac
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Header, Depends, Query
+from fastapi.responses import FileResponse, Response
+from config import RSS_FEEDS, CRON_SECRET, PUBLISH_BATCH_SIZE
 from services.database import (
     check_article_exists, is_semantic_duplicate, save_article_draft, get_recent_articles, supabase
 )
@@ -17,14 +19,25 @@ from services.queue_manager import (
     rescore_discarded_or_pending_articles, clean_expired_queue_items
 )
 from services.telegram import (
-    send_telegram_notification, send_ingestion_summary, send_publishing_summary, send_telegram_message
+    send_telegram_notification, send_ingestion_summary, send_publishing_summary,
+    send_telegram_message, send_telegram_photo
 )
 from services.threads import post_to_threads
 from services.instagram import post_to_instagram, post_to_instagram_story
-from services.story_generator import generate_story_canvas
+from services.card_generator import (
+    generate_feed_card, generate_story_card, render_feed_card, render_story_card
+)
+from services.card_design import MEDIA_DIR, source_label
+from services.captions import build_threads_caption, build_instagram_caption, fallback_drafts
 
 # Explicit ASGI application instantiation for Uvicorn
 app = FastAPI()
+
+
+def require_secret(x_cron_secret: str = Header(default="")):
+    """Protects trigger endpoints when CRON_SECRET is configured (no-op otherwise)."""
+    if CRON_SECRET and not hmac.compare_digest(x_cron_secret, CRON_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Cron-Secret")
 
 DEFAULT_BRAND_IMAGE = "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?q=80&w=1080&auto=format&fit=crop"
 
@@ -50,16 +63,22 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     title = article_data["title"]
     snippet = article_data["snippet"]
     link = article_data["url"]
-    feed_image = article_data.get("image_url") or DEFAULT_BRAND_IMAGE
+    raw_image = article_data.get("image_url") or ""
+    if raw_image == DEFAULT_BRAND_IMAGE:
+        raw_image = ""  # never present the generic stock photo as if it were the story's photo
+    source = source_label(link)
 
     mark_article_status(article_data, "processing")
 
     drafts, ai_err = generate_ai_draft(title, snippet, link, recent_topics)
     if not drafts or not isinstance(drafts, dict):
-        mark_article_status(article_data, "failed_retry")
-        return {}
+        print(f"[!] AI drafting failed ({ai_err}); using plain fallback captions.")
+        drafts = fallback_drafts(title, snippet, source)
 
-    save_article_draft(link, title, drafts.get("threads", ""), "processing")
+    threads_text = build_threads_caption(drafts.get("threads", ""), link=link, source=source)
+    instagram_text = build_instagram_caption(drafts.get("instagram", ""), source=source)
+
+    save_article_draft(link, title, threads_text, "processing")
 
     results = {
         "Threads": False,
@@ -67,39 +86,38 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
         "Instagram Story": False
     }
 
-    # 1. Threads Direct API
+    # Standard branded cards (same template for every post -> consistent profile grid)
+    feed_card_url = generate_feed_card(title, snippet, raw_image, source)
+    story_card_url = generate_story_card(title, snippet, raw_image, source)
+
+    # 1. Threads Direct API (card image; falls back to the plain photo / text-only)
     try:
-        results["Threads"] = post_to_threads(
-            drafts.get("threads", ""),
-            feed_image if feed_image != DEFAULT_BRAND_IMAGE else None
-        )
+        results["Threads"] = post_to_threads(threads_text, feed_card_url or raw_image or None)
     except Exception as e:
         print(f"[!] Threads exception: {e}")
 
-    # 2. Instagram Feed Photo
+    # 2. Instagram Feed Photo (needs an image: the card, or the raw photo as a last resort)
     try:
-        results["Instagram Feed"] = post_to_instagram(
-            drafts.get("instagram", ""),
-            feed_image
-        )
+        feed_image = feed_card_url or raw_image
+        if feed_image:
+            results["Instagram Feed"] = post_to_instagram(instagram_text, feed_image)
+        else:
+            print("[!] Instagram Feed skipped: no card and no photo available.")
     except Exception as e:
         print(f"[!] Instagram Feed exception: {e}")
 
-    # 3. Instagram Story (Branded 1080x1920 with headline & pill)
+    # 3. Instagram Story (branded 1080x1920 card)
     try:
-        story_image_url = generate_story_canvas(
-            title=title,
-            image_url=feed_image,
-            category="HUMAN RIGHTS REPORT"
-        )
-        if story_image_url:
-            results["Instagram Story"] = post_to_instagram_story(story_image_url)
+        if story_card_url:
+            results["Instagram Story"] = post_to_instagram_story(story_card_url)
     except Exception as e:
-        print(f"[!] Instagram Story generation/publish exception: {e}")
+        print(f"[!] Instagram Story publish exception: {e}")
 
     if any(results.values()):
         mark_article_status(article_data, "published")
-        send_telegram_notification(drafts.get("threads", ""), title, results)
+        send_telegram_notification(threads_text, title, results)
+        if feed_card_url:
+            send_telegram_photo(feed_card_url, f"Published card: {title[:120]}")
     else:
         mark_article_status(article_data, "failed_retry")
 
@@ -174,7 +192,7 @@ def ingest_feeds_task():
 def publish_queue_task():
     print("[*] Starting scheduled peak-window publication...")
     recent_topics = get_recent_articles(limit=15)
-    batch = get_top_prioritized_queue(limit=4)
+    batch = get_top_prioritized_queue(limit=PUBLISH_BATCH_SIZE)
     run_errors = []
     published_items = []
 
@@ -201,26 +219,52 @@ def rescore_task():
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check(): return {"status": "Online"}
 
-@app.api_route("/media/stories/{filename}", methods=["GET", "HEAD"])
-def serve_story_image(filename: str):
-    """Serves generated story images to Instagram API crawler."""
+ALLOWED_MEDIA_KINDS = {"feed", "stories"}
+
+@app.api_route("/media/{kind}/{filename}", methods=["GET", "HEAD"])
+def serve_media(kind: str, filename: str):
+    """Serves generated cards to the Instagram / Threads crawlers (public by design)."""
+    if kind not in ALLOWED_MEDIA_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown media type")
     clean_filename = os.path.basename(filename)
-    filepath = os.path.join("/tmp", clean_filename)
+    filepath = os.path.join(MEDIA_DIR, kind, clean_filename)
     if os.path.exists(filepath):
         return FileResponse(filepath, media_type="image/jpeg")
-    raise HTTPException(status_code=404, detail="Story image not found")
+    raise HTTPException(status_code=404, detail="Image not found")
 
-@app.api_route("/ingest-feeds", methods=["GET", "HEAD"])
+@app.get("/preview/{kind}", dependencies=[Depends(require_secret)])
+def preview_card(
+    kind: str,
+    title: str = Query("Journalists detained as press freedom declines", max_length=300),
+    snippet: str = Query("", max_length=600),
+    image_url: str = Query("", max_length=1000),
+    source: str = Query("Human Rights Watch", max_length=80),
+):
+    """Renders a card on demand so template changes can be checked without publishing.
+
+    Disabled unless CRON_SECRET is set, because `image_url` makes the server fetch a URL.
+    """
+    if not CRON_SECRET:
+        raise HTTPException(status_code=404, detail="Preview is disabled (set CRON_SECRET to enable)")
+    if kind not in ALLOWED_MEDIA_KINDS:
+        raise HTTPException(status_code=404, detail="Use /preview/feed or /preview/stories")
+    renderer = render_feed_card if kind == "feed" else render_story_card
+    img = renderer(title, snippet, image_url or None, source)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return Response(content=buf.getvalue(), media_type="image/jpeg")
+
+@app.api_route("/ingest-feeds", methods=["GET", "HEAD"], dependencies=[Depends(require_secret)])
 def trigger_ingestion(background_tasks: BackgroundTasks):
     background_tasks.add_task(ingest_feeds_task)
     return {"status": "Accepted", "task": "Ingestion & Scoring"}
 
-@app.api_route("/publish-queue", methods=["GET", "HEAD"])
+@app.api_route("/publish-queue", methods=["GET", "HEAD"], dependencies=[Depends(require_secret)])
 def trigger_publishing(background_tasks: BackgroundTasks):
     background_tasks.add_task(publish_queue_task)
     return {"status": "Accepted", "task": "Peak Publishing"}
 
-@app.api_route("/rescore-queue", methods=["GET", "HEAD"])
+@app.api_route("/rescore-queue", methods=["GET", "HEAD"], dependencies=[Depends(require_secret)])
 def trigger_rescore(background_tasks: BackgroundTasks):
     background_tasks.add_task(rescore_task)
     return {"status": "Accepted", "task": "Rescore"}
