@@ -51,7 +51,11 @@ def _brand_header(draw, x: int, y: int, right_edge: int, date_text: str):
 
 def render_feed_card(title: str, snippet: str = "", image_url: str = None,
                      source: str = "", category: tuple = None) -> Image.Image:
-    """Returns the finished 1080x1350 feed card as a PIL image."""
+    """Returns the finished 1080x1350 feed card as a PIL image.
+
+    `source` is accepted for compatibility but is NOT drawn on the card: the publisher
+    is credited in the caption instead.
+    """
     w, h = FEED_SIZE
     headline = d.clean_headline(title)
     label, accent = category or d.detect_category(headline, snippet)
@@ -89,12 +93,8 @@ def render_feed_card(title: str, snippet: str = "", image_url: str = None,
 
     # --- footer -----------------------------------------------------------
     draw.line((MARGIN, divider_y, w - MARGIN, divider_y), fill=(48, 60, 84), width=2)
-    f_src = d.get_font(26, bold=False)
-    f_handle = d.get_font(28)
-    if source:
-        draw.text((MARGIN, footer_y), f"Source: {source}", fill=d.MUTED, font=f_src)
-    hw = draw.textlength(d.BRAND_HANDLE, font=f_handle)
-    draw.text((w - MARGIN - hw, footer_y - 2), d.BRAND_HANDLE, fill=accent, font=f_handle)
+    f_handle = d.get_font(30)
+    draw.text((MARGIN, footer_y - 2), d.BRAND_HANDLE, fill=accent, font=f_handle)
     draw.rectangle((0, h - 14, w, h), fill=accent)
 
     return canvas.convert("RGB")
@@ -102,7 +102,11 @@ def render_feed_card(title: str, snippet: str = "", image_url: str = None,
 
 def render_story_card(title: str, snippet: str = "", image_url: str = None,
                       source: str = "", category: tuple = None) -> Image.Image:
-    """Returns the finished 1080x1920 story card as a PIL image."""
+    """Returns the finished 1080x1920 story card as a PIL image.
+
+    `source` is accepted for compatibility but is NOT drawn on the card: the publisher
+    is credited in the caption instead.
+    """
     w, h = STORY_SIZE
     headline = d.clean_headline(title)
     label, accent = category or d.detect_category(headline, snippet)
@@ -127,8 +131,7 @@ def render_story_card(title: str, snippet: str = "", image_url: str = None,
     draw.text((MARGIN, footer_y), d.BRAND_HANDLE, fill=accent, font=f_handle)
     draw.text((MARGIN, footer_y + 54), "Full report in our latest post", fill=d.MUTED, font=f_cta)
 
-    src_h = 56 if source else 0
-    headline_bottom = footer_y - 90 - src_h
+    headline_bottom = footer_y - 90
     font, lines = d.fit_text(draw, headline, w - MARGIN * 2, 8, 80, 46, max_height=760)
     line_h = int(font.size * d.LINE_SPACING)
     block_h = line_h * len(lines)
@@ -138,8 +141,6 @@ def render_story_card(title: str, snippet: str = "", image_url: str = None,
     for line in lines:
         draw.text((MARGIN, y), line, fill=d.WHITE, font=font)
         y += line_h
-    if source:
-        draw.text((MARGIN, y + 22), f"Source: {source}", fill=d.MUTED, font=d.get_font(30, bold=False))
 
     return canvas.convert("RGB")
 

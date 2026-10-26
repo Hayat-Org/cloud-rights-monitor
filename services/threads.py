@@ -1,7 +1,7 @@
 import time
 import requests
 from config import THREADS_USER_ID, THREADS_ACCESS_TOKEN
-from services.diagnostics import record_error
+from services.diagnostics import record_error, resolve_threads_user_id
 
 BASE = "https://graph.threads.net/v1.0"
 
@@ -54,7 +54,7 @@ def _publish(text: str, image_url, headers: dict, user_id: str) -> bool:
 def post_to_threads(caption: str, image_url: str = None) -> bool:
     """Publishes to Threads. If the image post fails, retries as a text-only post."""
     token = THREADS_ACCESS_TOKEN.strip() if THREADS_ACCESS_TOKEN else ""
-    user_id = THREADS_USER_ID.strip() if THREADS_USER_ID else ""
+    user_id = resolve_threads_user_id()
 
     if not user_id or not token or not caption:
         msg = f"missing required fields: user_id={bool(user_id)}, token={bool(token)}, caption={bool(caption)}"

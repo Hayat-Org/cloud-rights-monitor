@@ -28,7 +28,7 @@ from services.instagram import post_to_instagram, post_to_instagram_story
 from services.card_generator import (
     generate_feed_card, generate_story_card, render_feed_card, render_story_card
 )
-from services.card_design import MEDIA_DIR, source_label
+from services.card_design import MEDIA_DIR, source_label, outlet_from_title
 from services.captions import build_threads_caption, build_instagram_caption, fallback_drafts
 
 # Explicit ASGI application instantiation for Uvicorn
@@ -67,7 +67,7 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     raw_image = article_data.get("image_url") or ""
     if raw_image == DEFAULT_BRAND_IMAGE:
         raw_image = ""  # never present the generic stock photo as if it were the story's photo
-    source = source_label(link)
+    source = source_label(link) or outlet_from_title(title)
 
     mark_article_status(article_data, "processing")
 

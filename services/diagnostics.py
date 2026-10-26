@@ -10,6 +10,34 @@ from config import (
 )
 
 _errors = {}
+_threads_id_cache = {}
+
+
+def resolve_threads_user_id() -> str:
+    """
+    The Threads account id that belongs to the configured token.
+
+    Threads ids differ from Instagram ids and are easy to get wrong in settings, so the id
+    is looked up from the token itself (once, then cached). The THREADS_USER_ID setting is
+    only a fallback if that lookup fails.
+    """
+    token = (THREADS_ACCESS_TOKEN or "").strip()
+    if not token:
+        return (THREADS_USER_ID or "").strip()
+    if token in _threads_id_cache:
+        return _threads_id_cache[token]
+    try:
+        data = requests.get(
+            "https://graph.threads.net/v1.0/me",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"fields": "id"}, timeout=10,
+        ).json()
+        if isinstance(data, dict) and data.get("id"):
+            _threads_id_cache[token] = str(data["id"])
+            return _threads_id_cache[token]
+    except Exception:
+        pass
+    return (THREADS_USER_ID or "").strip()
 
 
 def record_error(platform: str, detail) -> None:
@@ -36,11 +64,9 @@ def _api_error(data) -> str:
 
 
 def check_threads() -> list:
-    """Problems with the Threads token / user id (empty list = OK)."""
+    """Problems with the Threads token (empty list = OK)."""
     if not THREADS_ACCESS_TOKEN:
         return ["Threads: no access token configured (THREADS_ACCESS_TOKEN / META_ACCESS_TOKEN)."]
-    if not THREADS_USER_ID:
-        return ["Threads: no user id configured (THREADS_USER_ID)."]
     try:
         res = requests.get(
             "https://graph.threads.net/v1.0/me",
@@ -53,9 +79,8 @@ def check_threads() -> list:
     msg = _api_error(data)
     if msg:
         return [f"Threads token rejected - {msg}. Generate a new Threads token (they expire after ~60 days)."]
-    if str(data.get("id")) != str(THREADS_USER_ID):
-        return [f"Threads: THREADS_USER_ID ({THREADS_USER_ID}) does not match the token's account "
-                f"(@{data.get('username')}, id {data.get('id')}). Threads ids differ from Instagram ids."]
+    # The account id is taken from the token itself (resolve_threads_user_id), so a different
+    # THREADS_USER_ID setting is harmless and no longer reported as a problem.
     return []
 
 

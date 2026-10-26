@@ -133,6 +133,15 @@ def source_label(url: str = "", feed_url: str = "") -> str:
 _OUTLET_SUFFIX = re.compile(r"\s+[-|–—]\s+((?:[A-Z0-9][\w.&']*)(?:\s+[A-Z0-9][\w.&']*){0,5})$")
 
 
+def outlet_from_title(title: str) -> str:
+    """Publisher name from a trailing ' - Outlet Name' (Google News titles); '' if none."""
+    t = re.sub(r"\s+", " ", title or "").strip()
+    if len(t.split()) <= 4:
+        return ""
+    m = _OUTLET_SUFFIX.search(t)
+    return m.group(1).strip() if m else ""
+
+
 def clean_headline(title: str) -> str:
     """Collapses whitespace and drops a trailing ' - Outlet Name' (Google News style).
 
